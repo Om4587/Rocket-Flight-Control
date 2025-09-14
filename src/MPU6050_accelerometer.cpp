@@ -82,3 +82,4 @@ void loop(){
   Serial.println(AccZ);
 
   delay(50);
+}
