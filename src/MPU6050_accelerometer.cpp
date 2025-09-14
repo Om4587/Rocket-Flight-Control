@@ -1,4 +1,4 @@
-
+#include<Arduino.h>
 #include<Wire.h>
 #include<Servo.h>
 int servoPin = 4; //X servo
@@ -82,3 +82,4 @@ void loop(){
   Serial.println(AccZ);
 
   delay(50);
+}
