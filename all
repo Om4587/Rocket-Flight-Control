@@ -1,0 +1,130 @@
+function dx = rocket6DOF(t, x)
+
+% ================= CONSTANTS =================
+g = 9.81;
+rho = 1.225;           % air density (kg/m^3)
+
+% Rocket geometry
+Aref = 0.005;          % reference area (m^2)
+Lref = 0.6;            % length (m)
+Cmq  = 0.06;           % aerodynamic damping coefficient
+
+% Mass properties
+m_dry = 0.5;           % dry mass (kg)
+mp0   = 0.2;           % propellant mass (kg)
+Tb    = 3.0;           % burn time (s)
+
+% CG locations
+x_dry = 0.18;
+x_p   = 0.24;
+xT    = 0.20;          % thrust line
+
+% Inertia
+J_dry = diag([0.02 0.02 0.01]);
+
+% Thrust
+Fmax = 50;             % N
+
+% ================= STATES =================
+u = x(4); v = x(5); w = x(6);
+q0=x(7); q1=x(8); q2=x(9); q3=x(10);
+p=x(11); q=x(12); r=x(13);
+
+vB = [u;v;w];
+omega = [p;q;r];
+
+% ================= MASS & CG =================
+if t < Tb
+    mp = mp0*(1 - t/Tb);
+    F  = Fmax;
+else
+    mp = 0;
+    F  = 0;
+end
+
+m = m_dry + mp;
+
+xcg = (m_dry*x_dry + mp*x_p)/(m);
+d_cg = x_p - xcg;
+
+J = J_dry + mp*(d_cg^2)*eye(3);
+
+% ================= ROTATION MATRIX =================
+R = quat2rotm([q0 q1 q2 q3]);
+
+% ================= FORCES =================
+FT = [F; 0; 0];
+Fg = R' * [0; 0; m*g];
+
+V = norm(vB);
+D = 0.5*rho*V^2*Aref;
+Fa = [-D; 0; 0];      % drag only (simplified)
+
+% ================= TRANSLATIONAL DYNAMICS =================
+aB = (FT + Fa + Fg)/m - cross(omega, vB);
+
+% ================= AERODYNAMIC DAMPING =================
+c_aero = 0.5*rho*V^2*Aref*Lref^2*Cmq;
+tau_aero = -c_aero * omega;
+
+% ================= THRUST TORQUE (CG SHIFT) =================
+tau_thrust = [0;
+              F*(xT - xcg);
+              0];
+
+% ================= ROTATIONAL DYNAMICS =================
+tau = tau_thrust + tau_aero;
+omegaDot = J \ (tau - cross(omega, J*omega));
+
+% ================= QUATERNION KINEMATICS =================
+Omega = [ 0 -p -q -r;
+          p  0  r -q;
+          q -r  0  p;
+          r  q -p  0 ];
+
+qDot = 0.5 * Omega * [q0;q1;q2;q3];
+
+% ================= STATE DERIVATIVE =================
+dx = zeros(13,1);
+dx(1:3)  = R*vB;
+dx(4:6)  = aB;
+dx(7:10) = qDot;
+dx(11:13)= omegaDot;
+end
+
+clc; clear; close all;
+
+% ================= SIMULATION SETUP =================
+tspan = [0 8];                 % seconds
+
+% Initial state vector
+% [x y z u v w q0 q1 q2 q3 p q r]
+x0 = zeros(13,1);
+x0(7) = 1;                     % quaternion q0 = 1
+
+% Integrate dynamics
+[t, x] = ode45(@rocket6DOF, tspan, x0);
+
+% ================== PLOTS ==================
+figure;
+plot(t, -x(:,3), 'LineWidth', 2)
+grid on
+xlabel('Time (s)')
+ylabel('Altitude (m)')
+title('Rocket Altitude (6-DOF)')
+
+figure;
+plot(t, x(:,11:13), 'LineWidth', 1.5)
+grid on
+xlabel('Time (s)')
+ylabel('Angular Rates (rad/s)')
+legend('p (roll)','q (pitch)','r (yaw)')
+title('Angular Rates')
+
+figure;
+plot(t, x(:,8:10), 'LineWidth', 1.5)
+grid on
+xlabel('Time (s)')
+ylabel('Quaternion Components')
+legend('q1','q2','q3')
+title('Attitude Evolution')
