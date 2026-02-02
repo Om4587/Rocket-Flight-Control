@@ -1,0 +1,159 @@
+#include <Wire.h>
+#include <Servo.h>
+
+Servo Xservo, Yservo;
+
+// ================= PINS =================
+const int SERVO_X_PIN = 6;
+const int SERVO_Y_PIN = 7;
+
+// ================= SERVO NEUTRALS =================
+const float X_CENTER = 75.0f;   // adjust only this
+const float Y_CENTER = 90.0f;   // adjust only this
+
+// ================= IMU =================
+float AccX, AccY, AccZ;
+float RatePitch, RateRoll;
+float AnglePitch = 0, AngleRoll = 0;
+
+const float GYRO_SCALE = 131.0;
+const float ALPHA = 0.92;
+
+unsigned long prevMicros;
+
+// ================= PID =================
+float Kp = 2.5;
+float Ki = 0.02;
+float Kd = 1.0;
+
+float intPitch = 0, intRoll = 0;
+float prevErrPitch = 0, prevErrRoll = 0;
+
+const float ERROR_DEADBAND = 0.5;
+
+// ================= STABILITY ADDITIONS =================
+const float RATE_DAMP = 0.15f;     // physical damping
+const float Kxy = 0.04f;           // cross-axis decoupling
+
+// ================= SERVO FILTER =================
+float servoX = X_CENTER;
+float servoY = Y_CENTER;
+const float SERVO_SMOOTH = 0.12;
+
+// =======================================================
+// ================= MPU6050 READ =========================
+// =======================================================
+void readMPU(float &dt)
+{
+  Wire.beginTransmission(0x68);
+  Wire.write(0x3B);
+  Wire.endTransmission(false);
+  Wire.requestFrom(0x68, 14, true);
+
+  int16_t ax = (Wire.read() << 8) | Wire.read();
+  int16_t ay = (Wire.read() << 8) | Wire.read();
+  int16_t az = (Wire.read() << 8) | Wire.read();
+  Wire.read(); Wire.read();
+  int16_t gx = (Wire.read() << 8) | Wire.read();
+  int16_t gy = (Wire.read() << 8) | Wire.read();
+  Wire.read(); Wire.read();
+
+  AccX = ax / 16384.0f;
+  AccY = ay / 16384.0f;
+  AccZ = az / 16384.0f;
+
+  RateRoll  = gx / GYRO_SCALE;
+  RatePitch = gy / GYRO_SCALE;
+
+  unsigned long now = micros();
+  dt = (now - prevMicros) * 1e-6;
+  prevMicros = now;
+  if (dt <= 0 || dt > 0.05) dt = 0.01;
+
+  float accPitch = atan2(AccZ, sqrt(AccX*AccX + AccY*AccY)) * 180 / PI;
+  float accRoll  = atan2(-AccX, sqrt(AccY*AccY + AccZ*AccZ)) * 180 / PI;
+
+  AnglePitch = ALPHA * (AnglePitch + RatePitch * dt) + (1 - ALPHA) * accPitch;
+  AngleRoll  = ALPHA * (AngleRoll  + RateRoll  * dt) + (1 - ALPHA) * accRoll;
+}
+
+// =======================================================
+// ================= PID FUNCTION =========================
+// =======================================================
+float PID(float target, float angle, float &integral, float &prevErr, float dt)
+{
+  float error = target - angle;
+  if (fabs(error) < ERROR_DEADBAND) error = 0;
+
+  integral += error * dt;
+  integral = constrain(integral, -20, 20);
+
+  float deriv = (error - prevErr) / dt;
+  prevErr = error;
+
+  return Kp * error + Ki * integral + Kd * deriv;
+}
+
+// =======================================================
+// ================= SETUP ================================
+// =======================================================
+void setup()
+{
+  Serial.begin(115200);
+  Wire.begin();
+  Wire.setClock(400000);
+
+  Wire.beginTransmission(0x68);
+  Wire.write(0x6B);
+  Wire.write(0);
+  Wire.endTransmission();
+
+  Xservo.attach(SERVO_X_PIN);
+  Yservo.attach(SERVO_Y_PIN);
+
+  Xservo.write(X_CENTER);
+  Yservo.write(Y_CENTER);
+
+  prevMicros = micros();
+
+  Serial.println("Pitch,Roll,ServoX,ServoY");
+}
+
+// =======================================================
+// ================= LOOP ================================
+// =======================================================
+void loop()
+{
+  float dt;
+  readMPU(dt);
+
+  // ---------- PID ----------
+  float outPitch = PID(0, AnglePitch, intPitch, prevErrPitch, dt);
+  float outRoll  = PID(0, AngleRoll,  intRoll,  prevErrRoll,  dt);
+
+  // ---------- RATE DAMPING ----------
+  outPitch -= RATE_DAMP * RatePitch;
+  outRoll  -= RATE_DAMP * RateRoll;
+
+  // ---------- AXIS DECOUPLING ----------
+  float uX = outPitch - Kxy * outRoll;
+  float uY = outRoll  + Kxy * outPitch;
+
+  // ---------- SERVO COMMAND ----------
+  float targetX = constrain(X_CENTER - uX, 0, 180);
+  float targetY = constrain(Y_CENTER - uY, 0, 180);
+
+  servoX += SERVO_SMOOTH * (targetX - servoX);
+  servoY += SERVO_SMOOTH * (targetY - servoY);
+
+  Xservo.write(servoX);
+  Yservo.write(servoY);
+
+  // ---------- SERIAL ----------
+  Serial.print(AnglePitch,2); Serial.print(",");
+  Serial.print(AngleRoll,2);  Serial.print(",");
+  Serial.print(servoX,1);     Serial.print(",");
+  Serial.println(servoY,1);
+
+  delay(8);
+}
